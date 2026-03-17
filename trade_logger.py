@@ -1,28 +1,42 @@
 import MetaTrader5 as mt5
 import pandas as pd
 from datetime import datetime
-import os
 
-# Connect to MT5
 mt5.initialize()
 
-# Get closed trades
 deals = mt5.history_deals_get(datetime(2025,1,1), datetime.now())
 
 data = []
 
 for d in deals:
     if d.entry == 1:  # closed trades only
+
+        time = datetime.fromtimestamp(d.time)
+        hour = time.hour
+
+        # Session detection (Germany time)
+        if 7 <= hour < 13:
+            session = "London"
+        elif 13 <= hour < 21:
+            session = "New York"
+        else:
+            session = "Asia"
+
+        # RR calculation (better approximation)
+        rr = 0
+        if d.volume > 0:
+            rr = abs(d.profit) / (d.volume * 10)
+
         data.append({
-            "date": datetime.fromtimestamp(d.time).strftime("%Y-%m-%d"),
+            "date": time,
             "profit": d.profit,
             "symbol": d.symbol,
-            "volume": d.volume,
+            "rr": rr,
+            "session": session
         })
 
 df = pd.DataFrame(data)
 
-# Save to CSV (your database)
 df.to_csv("trades.csv", index=False)
 
-print("✅ Trades updated")
+print("✅ trades.csv updated correctly")
