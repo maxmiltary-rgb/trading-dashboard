@@ -1,5 +1,4 @@
 import streamlit as st
-import MetaTrader5 as mt5
 import pandas as pd
 from datetime import datetime
 import calendar
@@ -49,64 +48,52 @@ st.markdown("""
 
 .small { font-size: 11px; opacity: 0.8; }
 .big { font-size: 15px; font-weight: bold; }
-
 </style>
 """, unsafe_allow_html=True)
 
 # ---------- SIDEBAR ----------
 st.sidebar.title("⚙️ Filters")
 
-symbol_filter = st.sidebar.multiselect(
-    "Symbol",
-    options=["XAUUSD", "EURUSD", "GBPUSD"],
-    default=["XAUUSD"]
-)
-
-session_filter = st.sidebar.multiselect(
-    "Session",
-    options=["London", "New York", "Asia"],
-    default=["London", "New York"]
-)
-
-# ---------- MT5 ----------
-if not mt5.initialize():
-    st.error("MT5 connection failed")
+# ---------- LOAD DATA ----------
+try:
+    df = pd.read_csv("trades.csv")
+except:
+    st.error("No trades.csv found. Upload it to your repo.")
     st.stop()
 
-deals = mt5.history_deals_get(datetime(2025,1,1), datetime.now())
-
-data = []
-for d in deals:
-    if d.entry == 1:
-        hour = datetime.fromtimestamp(d.time).hour
-
-        # Session detection
-        if 7 <= hour < 13:
-            session = "London"
-        elif 13 <= hour < 21:
-            session = "New York"
-        else:
-            session = "Asia"
-
-        data.append({
-            "date": datetime.fromtimestamp(d.time),
-            "profit": d.profit,
-            "symbol": d.symbol,
-            "rr": abs(d.profit / d.volume) if d.volume else 0,
-            "session": session
-        })
-
-df = pd.DataFrame(data)
-
-if df.empty:
-    st.warning("No trades found")
-    st.stop()
-
+df['date'] = pd.to_datetime(df['date'])
 df['date_only'] = df['date'].dt.date
 
-# ---------- APPLY FILTERS ----------
+# ---------- DEFAULT FIELDS IF MISSING ----------
+if 'symbol' not in df.columns:
+    df['symbol'] = "XAUUSD"
+
+if 'session' not in df.columns:
+    def get_session(hour):
+        if 7 <= hour < 13:
+            return "London"
+        elif 13 <= hour < 21:
+            return "New York"
+        else:
+            return "Asia"
+    df['session'] = df['date'].dt.hour.apply(get_session)
+
+if 'rr' not in df.columns:
+    df['rr'] = 1.0
+
+# ---------- FILTERS ----------
+symbols = df['symbol'].unique().tolist()
+sessions = df['session'].unique().tolist()
+
+symbol_filter = st.sidebar.multiselect("Symbol", symbols, default=symbols)
+session_filter = st.sidebar.multiselect("Session", sessions, default=sessions)
+
 df = df[df['symbol'].isin(symbol_filter)]
 df = df[df['session'].isin(session_filter)]
+
+if df.empty:
+    st.warning("No data after filtering")
+    st.stop()
 
 # ---------- DAILY ----------
 daily = df.groupby('date_only').agg(
@@ -116,21 +103,21 @@ daily = df.groupby('date_only').agg(
     avg_rr=('rr','mean')
 ).reset_index()
 
-# ---------- MOBILE STYLE HEADER ----------
+# ---------- HEADER ----------
 st.markdown("## 📊 PnL Overview")
 
 col1, col2, col3 = st.columns(3)
-col1.metric("Total", f"{df['profit'].sum():.2f}€")
+col1.metric("Total PnL", f"{df['profit'].sum():.2f}€")
 col2.metric("Trades", len(df))
 col3.metric("Win Rate", f"{(df['profit']>0).mean()*100:.1f}%")
 
 st.divider()
 
 # ---------- EQUITY ----------
-fig = go.Figure()
 df_sorted = df.sort_values('date')
 df_sorted['equity'] = df_sorted['profit'].cumsum()
 
+fig = go.Figure()
 fig.add_trace(go.Scatter(x=df_sorted['date'], y=df_sorted['equity']))
 st.plotly_chart(fig, use_container_width=True)
 
@@ -176,13 +163,16 @@ for week in cal:
             if cols[i].button(" ", key=str(date)):
                 st.session_state.selected_day = date
 
-# ---------- CLICK DAY ----------
+# ---------- CLICKED DAY ----------
 if st.session_state.selected_day:
     st.divider()
-    st.subheader(f"Trades on {st.session_state.selected_day}")
+    st.subheader(f"📊 Trades on {st.session_state.selected_day}")
 
     day_trades = df[df['date_only'] == st.session_state.selected_day]
     st.dataframe(day_trades)
+
+    # ---------- DISCIPLINE ----------
+    st.subheader("🧠 Discipline Analysis")
 
     trade_count = len(day_trades)
     pnl = day_trades['profit'].sum()
@@ -194,3 +184,7 @@ if st.session_state.selected_day:
     if pnl < 0 and trade_count >= 3:
         st.error("⚠️ Revenge trading detected")
         send_alert("⚠️ Revenge trading detected")
+
+    if not day_trades.empty and day_trades['profit'].min() < -2 * day_trades['profit'].mean():
+        st.warning("⚠️ Poor risk management / bad entry")
+        send_alert("⚠️ Bad entry behavior detected")
