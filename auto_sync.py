@@ -4,10 +4,7 @@ from datetime import datetime
 import os
 import time
 
-# ---------- SETTINGS ----------
-GITHUB_COMMIT_MSG = "auto update trades"
-
-# ---------- EXPORT TRADES ----------
+# ---------- EXPORT ----------
 def export_trades():
     mt5.initialize()
 
@@ -20,7 +17,6 @@ def export_trades():
             time_trade = datetime.fromtimestamp(d.time)
             hour = time_trade.hour
 
-            # Session detection
             if 7 <= hour < 13:
                 session = "London"
             elif 13 <= hour < 21:
@@ -39,16 +35,28 @@ def export_trades():
             })
 
     df = pd.DataFrame(data)
+
+    # 🔥 FORCE CHANGE (timestamp column)
+    df["last_update"] = datetime.now()
+
     df.to_csv("trades.csv", index=False)
 
     print("✅ trades.csv updated")
 
 
-# ---------- PUSH TO GITHUB ----------
+# ---------- PUSH ----------
 def push_to_github():
     os.system("git add .")
-    os.system(f'git commit -m "{GITHUB_COMMIT_MSG}"')
+
+    status = os.popen("git status --porcelain").read()
+
+    if status.strip() == "":
+        print("⚠️ No changes")
+        return
+
+    os.system('git commit -m "auto update trades"')
     os.system("git push")
+
     print("🚀 pushed to GitHub")
 
 
@@ -60,4 +68,4 @@ while True:
     except Exception as e:
         print("❌ Error:", e)
 
-    time.sleep(300)  # every 5 minutes
+    time.sleep(300)
