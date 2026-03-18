@@ -8,3 +8,5 @@ start cmd /k python -m streamlit run dashboard.py
 start cmd /k python flashybot.py
 
 give full script bacl already changed
+
+python auto_sync.py
