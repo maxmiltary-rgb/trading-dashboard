@@ -1,190 +1,255 @@
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from datetime import datetime
 import calendar
-import plotly.graph_objects as go
-import requests
 
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="Trading Dashboard", layout="wide")
 
-# ---------- TELEGRAM ----------
-BOT_TOKEN = ""
-CHAT_ID = ""
-
-def send_alert(message):
-    if BOT_TOKEN and CHAT_ID:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": message})
-
-# ---------- STYLE ----------
+# =========================
+# 🎨 PRO DARK BLUE THEME
+# =========================
 st.markdown("""
 <style>
-.stApp { background-color: #0e1117; color: white; }
+
+/* BACKGROUND */
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg, #0b1e2d, #0f2a3f);
+}
+
+/* REMOVE STREAMLIT UI */
 #MainMenu, footer, header {visibility: hidden;}
 
-.metric-box {
-    background: linear-gradient(145deg, #111827, #1f2937);
-    padding: 15px;
-    border-radius: 12px;
-    text-align: center;
-    margin-bottom: 10px;
+/* SIDEBAR */
+[data-testid="stSidebar"] {
+    background-color: #0a1926;
 }
 
-.day-card {
-    border-radius: 12px;
+/* CARDS */
+.card {
+    background: linear-gradient(145deg, #0f2a3f, #0b1e2d);
+    padding: 20px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.05);
+}
+
+/* TEXT */
+.metric-title {
+    color: #9ca3af;
+    font-size: 13px;
+}
+
+.metric-value {
+    font-size: 28px;
+    font-weight: 600;
+    color: white;
+}
+
+/* COLORS */
+.green { color: #22c55e; }
+.red { color: #ef4444; }
+
+/* CALENDAR */
+.day-box {
+    border-radius: 10px;
     padding: 10px;
-    font-weight: 500;
-    height: 85px;
-    transition: 0.2s;
+    height: 75px;
+    color: white;
 }
 
-.green { background: #16c784; }
-.red { background: #ea3943; }
-.gray { background: #2a2e39; }
+.pos { background-color: #14532d; }
+.neg { background-color: #7f1d1d; }
 
-.day-card:hover {
-    transform: scale(1.05);
+.header-day {
+    text-align: center;
+    color: #9ca3af;
+    font-size: 13px;
 }
 
-.small { font-size: 11px; opacity: 0.8; }
-.big { font-size: 15px; font-weight: bold; }
+/* TABLE */
+[data-testid="stDataFrame"] {
+    background-color: #0b1e2d;
+}
+
+/* BUTTONS */
+.stButton>button {
+    background-color: #1f6feb;
+    color: white;
+    border-radius: 6px;
+    border: none;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- SIDEBAR ----------
-st.sidebar.title("⚙️ Filters")
-
-# ---------- LOAD DATA ----------
-try:
-    df = pd.read_csv("trades.csv")
-except:
-    st.error("No trades.csv found. Upload it to your repo.")
-    st.stop()
-
+# =========================
+# LOAD DATA
+# =========================
+df = pd.read_csv("trades.csv")
 df['date'] = pd.to_datetime(df['date'])
-df['date_only'] = df['date'].dt.date
+df['profit'] = pd.to_numeric(df['profit'])
+df['day'] = df['date'].dt.date
 
-# ---------- DEFAULT FIELDS IF MISSING ----------
-if 'symbol' not in df.columns:
-    df['symbol'] = "XAUUSD"
+# =========================
+# CALCULATIONS
+# =========================
+total_pnl = df['profit'].sum()
+total_trades = len(df)
+wins = df[df['profit'] > 0].shape[0]
+losses = df[df['profit'] < 0].shape[0]
+winrate = (wins / total_trades * 100) if total_trades else 0
 
-if 'session' not in df.columns:
-    def get_session(hour):
-        if 7 <= hour < 13:
-            return "London"
-        elif 13 <= hour < 21:
-            return "New York"
-        else:
-            return "Asia"
-    df['session'] = df['date'].dt.hour.apply(get_session)
+df['equity'] = df['profit'].cumsum()
+daily = df.groupby('day')['profit'].sum()
 
-if 'rr' not in df.columns:
-    df['rr'] = 1.0
+# =========================
+# SIDEBAR NAV
+# =========================
+page = st.sidebar.radio("Menu", ["Dashboard", "Journal"])
 
-# ---------- FILTERS ----------
-symbols = df['symbol'].unique().tolist()
-sessions = df['session'].unique().tolist()
+# =========================
+# 📊 DASHBOARD
+# =========================
+if page == "Dashboard":
 
-symbol_filter = st.sidebar.multiselect("Symbol", symbols, default=symbols)
-session_filter = st.sidebar.multiselect("Session", sessions, default=sessions)
+    st.title("Dashboard")
 
-df = df[df['symbol'].isin(symbol_filter)]
-df = df[df['session'].isin(session_filter)]
+    # =========================
+    # OBJECTIVES ROW
+    # =========================
+    c1, c2, c3, c4 = st.columns(4)
 
-if df.empty:
-    st.warning("No data after filtering")
-    st.stop()
+    c1.markdown(f"""
+    <div class="card">
+    <div class="metric-title">Profit</div>
+    <div class="metric-value green">€{round(total_pnl,2)}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-# ---------- DAILY ----------
-daily = df.groupby('date_only').agg(
-    pnl=('profit','sum'),
-    trades=('profit','count'),
-    win_rate=('profit', lambda x: (x > 0).mean()),
-    avg_rr=('rr','mean')
-).reset_index()
+    c2.markdown(f"""
+    <div class="card">
+    <div class="metric-title">Win Rate</div>
+    <div class="metric-value">{round(winrate,1)}%</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-# ---------- HEADER ----------
-st.markdown("## 📊 PnL Overview")
+    c3.markdown(f"""
+    <div class="card">
+    <div class="metric-title">Wins</div>
+    <div class="metric-value green">{wins}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Total PnL", f"{df['profit'].sum():.2f}€")
-col2.metric("Trades", len(df))
-col3.metric("Win Rate", f"{(df['profit']>0).mean()*100:.1f}%")
+    c4.markdown(f"""
+    <div class="card">
+    <div class="metric-title">Losses</div>
+    <div class="metric-value red">{losses}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-st.divider()
-
-# ---------- EQUITY ----------
-df_sorted = df.sort_values('date')
-df_sorted['equity'] = df_sorted['profit'].cumsum()
-
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=df_sorted['date'], y=df_sorted['equity']))
-st.plotly_chart(fig, use_container_width=True)
-
-st.divider()
-
-# ---------- CLICK STATE ----------
-if "selected_day" not in st.session_state:
-    st.session_state.selected_day = None
-
-# ---------- CALENDAR ----------
-year = datetime.now().year
-month = datetime.now().month
-cal = calendar.monthcalendar(year, month)
-
-days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-cols = st.columns(7)
-
-for i, d in enumerate(days):
-    cols[i].markdown(f"**{d}**")
-
-for week in cal:
-    cols = st.columns(7)
-    for i, day in enumerate(week):
-        if day == 0:
-            cols[i].write("")
-        else:
-            date = datetime(year, month, day).date()
-            row = daily[daily['date_only'] == date]
-
-            pnl = row['pnl'].values[0] if not row.empty else 0
-            trades = row['trades'].values[0] if not row.empty else 0
-
-            cls = "green" if pnl > 0 else "red" if pnl < 0 else "gray"
-
-            cols[i].markdown(f"""
-            <div class="day-card {cls}">
-                <div class="small">{day}</div>
-                <div class="big">{pnl:.2f}€</div>
-                <div class="small">{trades} trades</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            if cols[i].button(" ", key=str(date)):
-                st.session_state.selected_day = date
-
-# ---------- CLICKED DAY ----------
-if st.session_state.selected_day:
     st.divider()
-    st.subheader(f"📊 Trades on {st.session_state.selected_day}")
 
-    day_trades = df[df['date_only'] == st.session_state.selected_day]
-    st.dataframe(day_trades)
+    # =========================
+    # EQUITY + STATS
+    # =========================
+    left, right = st.columns([2,1])
 
-    # ---------- DISCIPLINE ----------
-    st.subheader("🧠 Discipline Analysis")
+    # EQUITY
+    with left:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
 
-    trade_count = len(day_trades)
-    pnl = day_trades['profit'].sum()
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['date'],
+            y=df['equity'],
+            mode='lines',
+            line=dict(color='#22c55e', width=2)
+        ))
 
-    if trade_count > 3:
-        st.error("⚠️ Overtrading detected")
-        send_alert("⚠️ Overtrading detected")
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=0,r=0,t=20,b=0)
+        )
 
-    if pnl < 0 and trade_count >= 3:
-        st.error("⚠️ Revenge trading detected")
-        send_alert("⚠️ Revenge trading detected")
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    if not day_trades.empty and day_trades['profit'].min() < -2 * day_trades['profit'].mean():
-        st.warning("⚠️ Poor risk management / bad entry")
-        send_alert("⚠️ Bad entry behavior detected")
+    # STATS
+    with right:
+        st.markdown(f"""
+        <div class="card">
+        <div class="metric-title">Avg Trade</div>
+        <div class="metric-value">€{round(df['profit'].mean(),2)}</div>
+        <br>
+        <div class="metric-title">Best Day</div>
+        <div class="metric-value green">€{round(daily.max(),2)}</div>
+        <br>
+        <div class="metric-title">Worst Day</div>
+        <div class="metric-value red">€{round(daily.min(),2)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # =========================
+    # 📅 CALENDAR
+    # =========================
+    st.subheader("PnL Calendar")
+
+    year = datetime.now().year
+    month = datetime.now().month
+    cal = calendar.monthcalendar(year, month)
+
+    if "selected_day" not in st.session_state:
+        st.session_state.selected_day = None
+
+    day_names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+
+    header = st.columns(7)
+    for i, d in enumerate(day_names):
+        header[i].markdown(f"<div class='header-day'>{d}</div>", unsafe_allow_html=True)
+
+    for week in cal:
+        cols = st.columns(7)
+        for i, day in enumerate(week):
+            if day == 0:
+                cols[i].write("")
+            else:
+                date = datetime(year, month, day).date()
+                pnl = daily.get(date, 0)
+
+                cls = "pos" if pnl > 0 else "neg" if pnl < 0 else ""
+
+                cols[i].markdown(f"""
+                <div class="day-box {cls}">
+                    €{round(pnl,2)}
+                </div>
+                """, unsafe_allow_html=True)
+
+                if cols[i].button(str(day), key=f"btn_{date}"):
+                    st.session_state.selected_day = date
+
+    # CLICK DETAILS
+    if st.session_state.selected_day:
+        st.divider()
+        st.subheader(f"Trades on {st.session_state.selected_day}")
+        st.dataframe(df[df['day'] == st.session_state.selected_day], use_container_width=True)
+
+# =========================
+# 📄 JOURNAL PAGE
+# =========================
+if page == "Journal":
+
+    st.title("Trading Journal")
+
+    st.dataframe(df, use_container_width=True)
+
+    st.divider()
+
+    st.subheader("Performance")
+
+    st.write(f"Total Trades: {total_trades}")
+    st.write(f"Win Rate: {round(winrate,1)}%")
+    st.write(f"Total Profit: €{round(total_pnl,2)}")

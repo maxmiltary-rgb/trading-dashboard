@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, render_template
 from flask_cors import CORS
 import MetaTrader5 as mt5
 from datetime import datetime, timedelta
@@ -6,56 +6,61 @@ from datetime import datetime, timedelta
 app = Flask(__name__)
 CORS(app)
 
+# ---------------- CONNECT ----------------
 mt5.initialize()
 
-@app.route("/stats")
-def stats():
-    from_date = datetime.now() - timedelta(days=30)
-    deals = mt5.history_deals_get(from_date, datetime.now())
-    positions = mt5.positions_get()
+# ---------------- GET TRADES ----------------
+def get_trades():
+    to_date = datetime.now()
+    from_date = to_date - timedelta(days=30)
 
-    total = 0
-    wins = 0
-    profit = 0
-    equity = []
-    running = 0
-    history = []
+    deals = mt5.history_deals_get(from_date, to_date)
+
+    trades = []
 
     if deals:
         for d in deals:
-            if d.entry == 1:
-                total += 1
-                profit += d.profit
-                running += d.profit
-                equity.append(running)
-
-                history.append({
+            if d.type in [0, 1]:
+                trades.append({
                     "symbol": d.symbol,
-                    "profit": round(d.profit, 2),
                     "type": "BUY" if d.type == 0 else "SELL",
-                    "time": datetime.fromtimestamp(d.time).strftime("%d %b %H:%M")
+                    "profit": d.profit,
+                    "volume": d.volume,
+                    "time": datetime.fromtimestamp(d.time).strftime("%Y-%m-%d %H:%M")
                 })
 
-                if d.profit > 0:
-                    wins += 1
+    return trades
 
-    if positions:
-        for p in positions:
-            history.insert(0, {
-                "symbol": p.symbol,
-                "profit": round(p.profit, 2),
-                "type": "BUY" if p.type == 0 else "SELL",
-                "time": "OPEN"
-            })
+# ---------------- STATS ----------------
+@app.route('/stats')
+def stats():
+    trades = get_trades()
 
-    winrate = (wins / total * 100) if total > 0 else 0
+    total = len(trades)
+    wins = sum(1 for t in trades if t["profit"] > 0)
+    losses = sum(1 for t in trades if t["profit"] < 0)
+    profit = sum(t["profit"] for t in trades)
+
+    winrate = (wins / total * 100) if total else 0
 
     return jsonify({
-        "total_trades": total,
-        "winrate": round(winrate, 2),
+        "total": total,
+        "wins": wins,
+        "losses": losses,
         "profit": round(profit, 2),
-        "equity": equity,
-        "history": history
+        "winrate": round(winrate, 2)
     })
 
-app.run(host="0.0.0.0", port=5000)
+# ---------------- TRADES ----------------
+@app.route('/trades')
+def trades():
+    return jsonify(get_trades())
+
+# ---------------- DASHBOARD PAGE ----------------
+@app.route('/')
+def dashboard():
+    return render_template("dashboard.html")
+
+# ---------------- RUN ----------------
+if __name__ == '__main__':
+    app.run(host="0.0.0.0", port=5000)

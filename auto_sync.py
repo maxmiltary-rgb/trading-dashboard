@@ -1,71 +1,38 @@
 import MetaTrader5 as mt5
 import pandas as pd
-from datetime import datetime
-import os
+from datetime import datetime, timedelta
 import time
+import subprocess
 
-# ---------- EXPORT ----------
-def export_trades():
-    mt5.initialize()
+mt5.initialize()
 
-    deals = mt5.history_deals_get(datetime(2025,1,1), datetime.now())
+while True:
+    to_date = datetime.now()
+    from_date = to_date - timedelta(days=30)
+
+    deals = mt5.history_deals_get(from_date, to_date)
 
     data = []
 
-    for d in deals:
-        if d.entry == 1:
-            time_trade = datetime.fromtimestamp(d.time)
-            hour = time_trade.hour
-
-            if 7 <= hour < 13:
-                session = "London"
-            elif 13 <= hour < 21:
-                session = "New York"
-            else:
-                session = "Asia"
-
-            rr = abs(d.profit) / (d.volume * 10) if d.volume else 0
-
-            data.append({
-                "date": time_trade,
-                "profit": d.profit,
-                "symbol": d.symbol,
-                "rr": rr,
-                "session": session
-            })
+    if deals:
+        for d in deals:
+            if d.type in [0, 1]:
+                data.append({
+                    "date": datetime.fromtimestamp(d.time),
+                    "profit": d.profit,
+                    "symbol": d.symbol,
+                    "type": "BUY" if d.type == 0 else "SELL",
+                    "volume": d.volume
+                })
 
     df = pd.DataFrame(data)
 
-    # 🔥 FORCE CHANGE (timestamp column)
-    df["last_update"] = datetime.now()
+    if not df.empty:
+        df.to_csv("trades.csv", index=False)
+        print("✅ Updated trades.csv")
 
-    df.to_csv("trades.csv", index=False)
+        subprocess.run(["git", "add", "."])
+        subprocess.run(["git", "commit", "-m", "auto update"])
+        subprocess.run(["git", "push"])
 
-    print("✅ trades.csv updated")
-
-
-# ---------- PUSH ----------
-def push_to_github():
-    os.system("git add .")
-
-    status = os.popen("git status --porcelain").read()
-
-    if status.strip() == "":
-        print("⚠️ No changes")
-        return
-
-    os.system('git commit -m "auto update trades"')
-    os.system("git push")
-
-    print("🚀 pushed to GitHub")
-
-
-# ---------- LOOP ----------
-while True:
-    try:
-        export_trades()
-        push_to_github()
-    except Exception as e:
-        print("❌ Error:", e)
-
-    time.sleep(300)
+    time.sleep(10)  # update every 10 seconds

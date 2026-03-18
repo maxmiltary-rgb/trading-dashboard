@@ -1,122 +1,183 @@
 import MetaTrader5 as mt5
 import pandas as pd
 import time
-from datetime import datetime, UTC
+import requests
+from datetime import datetime
 
-SYMBOL = "XAUUSD"
-TIMEFRAME = mt5.TIMEFRAME_M15
-LOT = 0.01
+# ---------------- SETTINGS ----------------
+SYMBOL = "XAUUSD"  # change if needed
+RISK_PERCENT = 10
+MAX_DAILY_LOSS_PERCENT = 30
 
-trades_today = 0
-current_day = datetime.now(UTC).day
+current_day = datetime.now().day
+start_balance = None
 
+# ---------------- CONNECT ----------------
 if not mt5.initialize():
     print("MT5 connection failed")
     quit()
 else:
     print("Connected to MT5")
 
+# ---------------- FUNCTIONS ----------------
 
-def get_data():
-    rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, 300)
+def send_to_dashboard(direction, lot, entry, sl, tp):
+    url = "http://127.0.0.1:5000/new_trade"
+
+    data = {
+        "symbol": SYMBOL,
+        "type": direction,
+        "lot": lot,
+        "entry": entry,
+        "sl": sl,
+        "tp": tp,
+        "time": str(datetime.now())
+    }
+
+    try:
+        requests.post(url, json=data)
+        print("📡 Sent to dashboard ✅")
+    except:
+        print("❌ Failed to send to dashboard")
+
+def get_data(tf, bars=200):
+    rates = mt5.copy_rates_from_pos(SYMBOL, tf, 0, bars)
     return pd.DataFrame(rates)
 
-
 def get_trend():
-    rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_H4, 0, 150)
-    df = pd.DataFrame(rates)
+    df = get_data(mt5.TIMEFRAME_H4)
     df['ma'] = df['close'].rolling(100).mean()
     return "buy" if df['close'].iloc[-1] > df['ma'].iloc[-1] else "sell"
 
+def get_zone():
+    df = get_data(mt5.TIMEFRAME_H1)
+    high = df['high'].rolling(20).max().iloc[-1]
+    low = df['low'].rolling(20).min().iloc[-1]
+    price = df['close'].iloc[-1]
 
-def detect_fvg(df):
-    for i in range(len(df)-10, len(df)-1):
-        gap = abs(df['low'][i] - df['high'][i-2])
-        if gap < 1.5:
-            continue
-
-        if df['low'][i] > df['high'][i-2]:
-            return ("buy", float(df['high'][i-2]), float(df['low'][i]))
-
-        if df['high'][i] < df['low'][i-2]:
-            return ("sell", float(df['high'][i]), float(df['low'][i-2]))
+    if abs(price - high) < 5:
+        return ("sell", high)
+    if abs(price - low) < 5:
+        return ("buy", low)
 
     return None
 
+def detect_bos():
+    df = get_data(mt5.TIMEFRAME_M15)
+
+    if df['close'].iloc[-1] > df['high'].rolling(20).max().iloc[-2]:
+        return "buy"
+    if df['close'].iloc[-1] < df['low'].rolling(20).min().iloc[-2]:
+        return "sell"
+
+    return None
+
+def entry_confirmation(direction):
+    df = get_data(mt5.TIMEFRAME_M5)
+    last = df['close'].iloc[-2]
+    prev = df['close'].iloc[-3]
+
+    return last > prev if direction == "buy" else last < prev
 
 def is_trading_session():
-    hour = datetime.now(UTC).hour
-    return (7 <= hour <= 11) or (13 <= hour <= 17)
+    hour = datetime.now().hour
+    return 8 <= hour < 22
 
+def calculate_lot(sl_points):
+    balance = mt5.account_info().balance
+    risk_amount = balance * (RISK_PERCENT / 100)
+    pip_value = 0.1
+    lot = risk_amount / (sl_points * pip_value)
+    return round(max(0.01, min(lot, 5)), 2)
 
-def place_trade(direction, sl, tp):
+def hit_daily_loss():
+    global start_balance
+    balance = mt5.account_info().balance
+
+    if start_balance is None:
+        start_balance = balance
+
+    loss = (start_balance - balance) / start_balance * 100
+    return loss >= MAX_DAILY_LOSS_PERCENT
+
+def place_trade(direction, sl, tp, lot):
     tick = mt5.symbol_info_tick(SYMBOL)
     price = tick.ask if direction == "buy" else tick.bid
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": SYMBOL,
-        "volume": LOT,
+        "volume": lot,
         "type": mt5.ORDER_TYPE_BUY if direction == "buy" else mt5.ORDER_TYPE_SELL,
         "price": price,
         "sl": sl,
         "tp": tp,
         "deviation": 20,
-        "magic": 123456,
-        "comment": "SNIPER BOT",
+        "magic": 777,
+        "comment": "SNIPER V3",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
 
     result = mt5.order_send(request)
-    print("ORDER RESULT:", result)
+    print("📈 ORDER:", result)
+    return price
 
+# ---------------- MAIN LOOP ----------------
 
 while True:
-    print("\nBot running...")
+    print("\n🤖 Bot running...")
 
-    now = datetime.now(UTC)
+    now = datetime.now()
 
+    # reset daily loss tracker
     if now.day != current_day:
-        trades_today = 0
         current_day = now.day
+        start_balance = None
 
     if not is_trading_session():
-        print("Outside session")
+        print("⏰ Outside trading hours")
         time.sleep(60)
         continue
 
-    if trades_today >= 3:
-        print("Max trades reached")
-        time.sleep(60)
+    if hit_daily_loss():
+        print("🛑 Daily loss limit reached")
+        time.sleep(300)
         continue
 
-    df = get_data()
     trend = get_trend()
-    fvg = detect_fvg(df)
+    zone = get_zone()
+    bos = detect_bos()
 
-    print("Trend:", trend, "| FVG:", fvg)
+    print(f"Trend: {trend} | Zone: {zone} | BOS: {bos}")
 
-    if fvg:
-        direction, low, high = fvg
+    if zone and bos:
+        direction, level = zone
 
-        if direction == trend:
-            last_close = df['close'].iloc[-2]
+        if direction == trend and direction == bos:
 
-            if low < last_close < high:
-                print("Entry confirmed")
+            if entry_confirmation(direction):
+                print("🎯 Sniper entry confirmed")
 
-                price = df['close'].iloc[-1]
+                tick = mt5.symbol_info_tick(SYMBOL)
+                price = tick.ask if direction == "buy" else tick.bid
 
                 if direction == "buy":
-                    sl = low - 2
+                    sl = level - 2
                     tp = price + (price - sl) * 2
+                    sl_points = abs(price - sl)
                 else:
-                    sl = high + 2
+                    sl = level + 2
                     tp = price - (sl - price) * 2
+                    sl_points = abs(sl - price)
 
-                place_trade(direction, sl, tp)
-                trades_today += 1
+                lot = calculate_lot(sl_points)
+
+                print(f"💰 Lot size: {lot}")
+
+                entry_price = place_trade(direction, sl, tp, lot)
+
+                send_to_dashboard(direction, lot, entry_price, sl, tp)
 
                 time.sleep(300)
 
