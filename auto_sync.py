@@ -16,10 +16,16 @@ while True:
 
     if deals:
         for d in deals:
-            if d.type in [0, 1]:
+
+            # ✅ ONLY CLOSED TRADES
+            if d.entry == 1:  
+
+                # ✅ REAL PROFIT (matches MT5)
+                real_profit = d.profit + d.commission + d.swap
+
                 data.append({
                     "date": datetime.fromtimestamp(d.time),
-                    "profit": d.profit,
+                    "profit": real_profit,
                     "symbol": d.symbol,
                     "type": "BUY" if d.type == 0 else "SELL",
                     "volume": d.volume
@@ -29,10 +35,10 @@ while True:
 
     if not df.empty:
         df.to_csv("trades.csv", index=False)
-        print("✅ Updated trades.csv")
+        print("✅ Updated trades.csv (REAL MT5 DATA)")
 
         subprocess.run(["git", "add", "."])
         subprocess.run(["git", "commit", "-m", "auto update"])
         subprocess.run(["git", "push"])
 
-    time.sleep(10)  # update every 10 seconds
+    time.sleep(10)

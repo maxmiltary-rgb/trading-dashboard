@@ -4,4 +4,7 @@ start cmd /k python xau_sniper_bot.py
 start cmd /k python telegram_copier.py
 start cmd /k python tracker.py
 
-python -m streamlit run dashboard.py
+start cmd /k python -m streamlit run dashboard.py
+start cmd /k python flashybot.py
+
+give full script bacl already changed
